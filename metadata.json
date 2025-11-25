@@ -1,0 +1,5 @@
+{
+  "name": "Nexus Internal AI",
+  "description": "An intelligent internal assistant utilizing RAG to route queries between general company policy and specific department documentation, with a web-search fallback mechanism.",
+  "requestFramePermissions": []
+}
