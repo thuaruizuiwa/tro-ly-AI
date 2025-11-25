@@ -4,14 +4,24 @@ import { AppSettings, User } from '../types';
 interface LoginScreenProps {
   settings: AppSettings;
   onLogin: (user: User) => void;
+  gapiInitialized: boolean;
 }
 
-const LoginScreen: React.FC<LoginScreenProps> = ({ settings, onLogin }) => {
+const LoginScreen: React.FC<LoginScreenProps> = ({ settings, onLogin, gapiInitialized }) => {
   const [error, setError] = useState('');
   const [isPopupOpen, setIsPopupOpen] = useState(false);
 
+  const isButtonDisabled = !gapiInitialized || !settings.geminiApiKey || !settings.userSheetUrl;
+
+  const getButtonText = () => {
+    if (!settings.geminiApiKey || !settings.userSheetUrl) return "Cài đặt chưa hoàn tất";
+    if (!gapiInitialized) return "Đang khởi tạo...";
+    return "Tiếp tục với Google";
+  };
+
   // Simulation of Google Auth Flow
   const handleGoogleLogin = () => {
+    if (isButtonDisabled) return;
     setIsPopupOpen(true);
   };
 
@@ -35,10 +45,11 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ settings, onLogin }) => {
 
         <button
           onClick={handleGoogleLogin}
-          className="w-full bg-white text-gray-700 font-medium py-3 px-4 rounded-lg border border-gray-300 hover:bg-gray-50 transition-all flex items-center justify-center gap-3 shadow-sm hover:shadow"
+          disabled={isButtonDisabled}
+          className="w-full bg-white text-gray-700 font-medium py-3 px-4 rounded-lg border border-gray-300 hover:bg-gray-50 transition-all flex items-center justify-center gap-3 shadow-sm hover:shadow disabled:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <img src="https://upload.wikimedia.org/wikipedia/commons/5/53/Google_%22G%22_Logo.svg" alt="G" className="w-5 h-5" />
-          Tiếp tục với Google
+          {getButtonText()}
         </button>
 
         <div className="mt-8 text-xs text-gray-400">

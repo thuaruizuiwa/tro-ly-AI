@@ -4,7 +4,7 @@ import Sidebar from './components/Sidebar';
 import SettingsScreen from './components/SettingsScreen';
 import { User, ChatMessage, MessageType, SourceType, AppSettings } from './types';
 import { processQuery } from './services/geminiService';
-import { getSettings } from './services/storageService';
+import { getSettings, initializeGapiClient } from './services/storageService';
 import ReactMarkdown from 'react-markdown';
 
 export default function App() {
@@ -15,8 +15,25 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [view, setView] = useState<'chat' | 'settings'>('chat');
+  const [gapiInitialized, setGapiInitialized] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Initialize GAPI client
+  useEffect(() => {
+    if (settings.geminiApiKey) {
+      initializeGapiClient(settings.geminiApiKey)
+        .then(() => {
+          console.log("GAPI client initialized successfully.");
+          setGapiInitialized(true);
+        })
+        .catch(error => {
+          console.error("Error initializing GAPI client:", error);
+          // Optionally, show a generic error to the user
+        });
+    }
+  }, [settings.geminiApiKey]);
+
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -78,7 +95,7 @@ export default function App() {
   };
 
   if (!user) {
-    return <LoginScreen settings={settings} onLogin={setUser} />;
+    return <LoginScreen settings={settings} onLogin={setUser} gapiInitialized={gapiInitialized} />;
   }
 
   return (
