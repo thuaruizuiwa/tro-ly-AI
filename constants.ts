@@ -1,44 +1,5 @@
 import { Department, DriveFile, User, UserRole } from './types';
 
-// Mock Data simulating what would be fetched from the Google Sheet
-export const MOCK_SHEET_USERS: User[] = [
-  { 
-    email: 'admin@nexus.com', 
-    name: 'Admin User', 
-    department: Department.EXECUTIVE, 
-    role: UserRole.ADMIN 
-  },
-  { 
-    email: 'hr.manager@nexus.com', 
-    name: 'Sarah HR', 
-    department: Department.HR, 
-    role: UserRole.EDITOR 
-  },
-  { 
-    email: 'chess.lead@nexus.com', 
-    name: 'Magnus C.', 
-    department: Department.CHESS_TEACHER, 
-    role: UserRole.EDITOR 
-  },
-  { 
-    email: 'sale.online@nexus.com', 
-    name: 'Alex Sales', 
-    department: Department.ONLINE_SALES, 
-    role: UserRole.EMPLOYEE 
-  },
-  { 
-    email: 'art.teacher@nexus.com', 
-    name: 'Bob Ross', 
-    department: Department.ART_TEACHER, 
-    role: UserRole.EMPLOYEE 
-  },
-  {
-    email: 'cskh@nexus.com',
-    name: 'Emily Support',
-    department: Department.CUSTOMER_CARE,
-    role: UserRole.EMPLOYEE
-  }
-];
 
 export const INITIAL_FOLDERS: Record<Department, string> = {
   [Department.GENERAL]: 'https://drive.google.com/drive/folders/general-123',
