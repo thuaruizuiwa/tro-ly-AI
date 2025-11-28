@@ -37,9 +37,11 @@ export interface DriveFile {
 
 export interface AppSettings {
   geminiApiKey: string;
+  googleClientId?: string; // New: Required for Drive API Client-side flow
   userSheetUrl: string;
-  departmentFolders: Record<Department, string>; // Maps Department to Drive Folder ID/Link
+  departmentFolders: Record<Department, string>; // Maps Department to Drive Folder ID/Link (For reference only)
   users: User[]; // Cached users from the sheet
+  knowledgeBase: DriveFile[]; // Dynamic list of documents managed by Admin
 }
 
 export enum MessageType {

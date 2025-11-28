@@ -1,6 +1,28 @@
-import React, { useState, useEffect } from 'react';
-import { AppSettings, User, Department, UserRole } from '../types';
+import React, { useState, useEffect, useCallback } from 'react';
+import { AppSettings, User, Department, UserRole, DriveFile } from '../types';
 import { saveSettings, syncUsersFromSheet } from '../services/storageService';
+// @ts-ignore
+import * as pdfjsLibProxy from 'pdfjs-dist';
+// @ts-ignore
+import * as mammothProxy from 'mammoth';
+
+// Normalize Import: Handle cases where library is default export or named export
+// @ts-ignore
+const pdfjsLib = pdfjsLibProxy.default || pdfjsLibProxy;
+// @ts-ignore
+const mammoth = mammothProxy.default || mammothProxy;
+
+// Configure PDF.js Worker
+if (pdfjsLib.GlobalWorkerOptions) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js`;
+}
+
+declare global {
+  interface Window {
+    google: any;
+    gapi: any;
+  }
+}
 
 interface SettingsScreenProps {
   settings: AppSettings;
@@ -14,11 +36,91 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ settings, onSave, onClo
   const [localSettings, setLocalSettings] = useState<AppSettings>(settings);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState('');
+  
+  // Document Editing State
+  const [editingDocId, setEditingDocId] = useState<string | null>(null);
+  const [docForm, setDocForm] = useState<Partial<DriveFile>>({ department: Department.GENERAL, mimeType: 'text/plain' });
+  const [showDocForm, setShowDocForm] = useState(false);
+
+  // Drive Import State
+  const [isImporting, setIsImporting] = useState(false);
+  const [importStatus, setImportStatus] = useState('');
+  const [tokenClient, setTokenClient] = useState<any>(null);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [driveUserEmail, setDriveUserEmail] = useState<string | null>(null);
+  const [isGoogleLibReady, setIsGoogleLibReady] = useState(false);
 
   // Permission Check
   const canEditSystem = currentUserRole === UserRole.ADMIN;
   const canEditUsers = currentUserRole === UserRole.ADMIN;
   const canEditKnowledge = currentUserRole === UserRole.ADMIN || currentUserRole === UserRole.EDITOR;
+
+  // Initialize Google Identity Services (GIS)
+  const initializeGsi = useCallback(() => {
+    if (window.google?.accounts?.oauth2 && localSettings.googleClientId) {
+        try {
+            console.log("Init Token Client with:", localSettings.googleClientId);
+            const client = window.google.accounts.oauth2.initTokenClient({
+                client_id: localSettings.googleClientId,
+                scope: 'https://www.googleapis.com/auth/drive.readonly',
+                callback: (tokenResponse: any) => {
+                    console.log("Token Response:", tokenResponse);
+                    if (tokenResponse.error) {
+                        alert("Lỗi đăng nhập Google (Error): " + JSON.stringify(tokenResponse));
+                        return;
+                    }
+                    if (tokenResponse.access_token) {
+                        setAccessToken(tokenResponse.access_token);
+                        // Fetch user info
+                        fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+                            headers: { Authorization: `Bearer ${tokenResponse.access_token}` }
+                        })
+                        .then(res => res.json())
+                        .then(data => setDriveUserEmail(data.email))
+                        .catch(err => console.error("Failed to fetch user info", err));
+                    }
+                },
+            });
+            setTokenClient(client);
+            setIsGoogleLibReady(true);
+        } catch (e) {
+            console.error("Failed to init GIS", e);
+        }
+    }
+  }, [localSettings.googleClientId]);
+
+  // Check for script load periodically
+  useEffect(() => {
+    const checkInterval = setInterval(() => {
+        if (window.google?.accounts?.oauth2) {
+            initializeGsi();
+            setIsGoogleLibReady(true);
+            clearInterval(checkInterval);
+        }
+    }, 500);
+    return () => clearInterval(checkInterval);
+  }, [initializeGsi]);
+
+  const handleConnectDrive = () => {
+    if (!localSettings.googleClientId) {
+        alert("Vui lòng nhập Google Client ID trong tab 'Hệ thống' trước.");
+        setActiveTab('system');
+        return;
+    }
+    
+    if (!tokenClient && !window.google?.accounts?.oauth2) {
+        alert("Đang tải thư viện Google... Vui lòng thử lại sau vài giây.");
+        return;
+    }
+
+    if (tokenClient) {
+        tokenClient.requestAccessToken({ prompt: 'consent' });
+    } else {
+        // Fallback: Try to init again if clicked
+        initializeGsi();
+        alert("Đang khởi tạo kết nối. Vui lòng bấm nút lần nữa.");
+    }
+  };
 
   const handleSyncUsers = async () => {
     if (!localSettings.userSheetUrl) {
@@ -41,6 +143,214 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ settings, onSave, onClo
   const handleSave = () => {
     saveSettings(localSettings);
     onSave(localSettings);
+  };
+
+  // --- Document CRUD Handlers ---
+
+  const handleEditDoc = (doc: DriveFile) => {
+    setEditingDocId(doc.id);
+    setDocForm({ ...doc });
+    setShowDocForm(true);
+  };
+
+  const handleAddDoc = () => {
+    setEditingDocId(null);
+    setDocForm({ 
+        name: '', 
+        content: '', 
+        webViewLink: '', 
+        department: Department.GENERAL, 
+        mimeType: 'text/plain' 
+    });
+    setShowDocForm(true);
+  };
+
+  const handleDeleteDoc = (id: string) => {
+    if(window.confirm("Bạn có chắc chắn muốn xóa tài liệu này?")) {
+        setLocalSettings(prev => ({
+            ...prev,
+            knowledgeBase: prev.knowledgeBase.filter(d => d.id !== id)
+        }));
+    }
+  };
+
+  const handleSaveDoc = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!docForm.name || !docForm.content) return;
+
+    if (editingDocId) {
+        // Update existing
+        setLocalSettings(prev => ({
+            ...prev,
+            knowledgeBase: prev.knowledgeBase.map(d => d.id === editingDocId ? { ...d, ...docForm } as DriveFile : d)
+        }));
+    } else {
+        // Create new
+        const newDoc: DriveFile = {
+            ...docForm as DriveFile,
+            id: 'doc_' + Date.now(),
+        };
+        setLocalSettings(prev => ({
+            ...prev,
+            knowledgeBase: [...prev.knowledgeBase, newDoc]
+        }));
+    }
+    setShowDocForm(false);
+  };
+
+  // --- FILE PARSING HELPERS ---
+
+  const parsePdf = async (arrayBuffer: ArrayBuffer): Promise<string> => {
+    try {
+      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+      const pdf = await loadingTask.promise;
+      let fullText = '';
+      
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items.map((item: any) => item.str).join(' ');
+        fullText += pageText + '\n';
+      }
+      return fullText;
+    } catch (e) {
+      console.error("PDF Parse Error", e);
+      throw new Error("Không thể đọc file PDF. File có thể bị hỏng hoặc đặt mật khẩu.");
+    }
+  };
+
+  const parseDocx = async (arrayBuffer: ArrayBuffer): Promise<string> => {
+    try {
+      const result = await mammoth.extractRawText({ arrayBuffer: arrayBuffer });
+      return result.value;
+    } catch (e) {
+       console.error("Docx Parse Error", e);
+       throw new Error("Không thể đọc file Word.");
+    }
+  };
+
+  // --- GOOGLE DRIVE INTEGRATION ---
+
+  const extractFolderId = (url: string) => {
+    const match = url.match(/folders\/([a-zA-Z0-9-_]+)/) || url.match(/id=([a-zA-Z0-9-_]+)/);
+    return match ? match[1] : url; 
+  };
+
+  const triggerDriveImport = async (dept: Department, folderLink: string) => {
+    if (!accessToken) {
+        alert("Vui lòng kết nối Google Drive trước.");
+        return;
+    }
+    if (!localSettings.geminiApiKey) {
+        alert("Chưa có Gemini API Key.");
+        return;
+    }
+    if (!folderLink) {
+        alert("Vui lòng nhập Link Folder Drive.");
+        return;
+    }
+    
+    await processDriveImport(dept, folderLink, accessToken);
+  };
+
+  const processDriveImport = async (dept: Department, folderLink: string, token: string) => {
+    const folderId = extractFolderId(folderLink);
+    setIsImporting(true);
+    setImportStatus(`Đang kết nối Drive cho ${dept}...`);
+
+    try {
+        // Load GAPI client if not loaded
+        if (!window.gapi.client?.drive) {
+            await new Promise<void>((resolve) => window.gapi.load('client', resolve));
+            await window.gapi.client.init({
+                discoveryDocs: ["https://www.googleapis.com/discovery/v1/apis/drive/v3/rest"]
+            });
+        }
+        
+        // Always ensure token is set for GAPI calls
+        window.gapi.client.setToken({ access_token: token });
+
+        setImportStatus("Đang quét file...");
+        
+        // List files: Docs, PDF, Word
+        const listRes = await window.gapi.client.drive.files.list({
+            q: `'${folderId}' in parents and trashed = false and (mimeType = 'application/vnd.google-apps.document' or mimeType = 'text/plain' or mimeType = 'application/pdf' or mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')`,
+            fields: 'files(id, name, mimeType, webViewLink)',
+            pageSize: 50
+        });
+
+        const files = listRes.result.files;
+        if (!files || files.length === 0) {
+            alert(`Không tìm thấy tài liệu phù hợp (Doc, PDF, Word) trong thư mục.`);
+            setIsImporting(false);
+            return;
+        }
+
+        setImportStatus(`Tìm thấy ${files.length} file. Đang xử lý...`);
+        let importedCount = 0;
+        const newDocs: DriveFile[] = [];
+
+        for (const file of files) {
+            try {
+                setImportStatus(`Đang tải: ${file.name}...`);
+                let content = '';
+                
+                if (file.mimeType === 'application/vnd.google-apps.document') {
+                    // Google Doc -> Text
+                    const res = await window.gapi.client.drive.files.export({
+                        fileId: file.id, mimeType: 'text/plain'
+                    });
+                    content = res.body;
+                } else {
+                    // Binary files (PDF, Word) -> ArrayBuffer -> Text
+                    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
+                    const arrayBuffer = await res.arrayBuffer();
+
+                    if (file.mimeType === 'application/pdf') {
+                        content = await parsePdf(arrayBuffer);
+                    } else if (file.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+                        content = await parseDocx(arrayBuffer);
+                    } else if (file.mimeType === 'text/plain') {
+                         content = await new TextDecoder().decode(arrayBuffer);
+                    }
+                }
+
+                if (content && content.trim().length > 0) {
+                    newDocs.push({
+                        id: file.id,
+                        name: file.name,
+                        content: content,
+                        department: dept,
+                        webViewLink: file.webViewLink,
+                        mimeType: file.mimeType
+                    });
+                    importedCount++;
+                }
+            } catch (err) {
+                console.warn(`Skipped ${file.name}:`, err);
+            }
+        }
+
+        setLocalSettings(prev => {
+            const existingIds = new Set(prev.knowledgeBase.map(d => d.id));
+            const uniqueNewDocs = newDocs.filter(d => !existingIds.has(d.id));
+            return {
+                ...prev,
+                knowledgeBase: [...prev.knowledgeBase, ...uniqueNewDocs]
+            };
+        });
+
+        alert(`Đã nhập thành công ${importedCount} tài liệu mới.`);
+
+    } catch (error: any) {
+        console.error("Drive Import Error", error);
+        alert("Lỗi nhập dữ liệu: " + (error?.result?.error?.message || error.message));
+    } finally {
+        setIsImporting(false);
+        setImportStatus('');
+    }
   };
 
   return (
@@ -79,13 +389,13 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ settings, onSave, onClo
             active={activeTab === 'knowledge'} 
             onClick={() => setActiveTab('knowledge')} 
             icon="fa-folder-tree" 
-            label="Kho tài liệu (Drive)"
+            label="Kho dữ liệu nguồn"
             disabled={!canEditKnowledge}
           />
         </div>
 
         {/* Content Area */}
-        <div className="flex-1 overflow-y-auto p-8">
+        <div className="flex-1 overflow-y-auto p-8 relative">
           
           {/* SYSTEM TAB */}
           {activeTab === 'system' && (
@@ -103,6 +413,20 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ settings, onSave, onClo
                       className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                     />
                     <p className="text-xs text-gray-500 mt-1">Dùng để kích hoạt Gemini 2.5 Flash.</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Google OAuth Client ID</label>
+                    <input 
+                      type="text" 
+                      value={localSettings.googleClientId || ''}
+                      onChange={(e) => setLocalSettings({...localSettings, googleClientId: e.target.value})}
+                      placeholder="xxxx-xxxx.apps.googleusercontent.com"
+                      className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                        Bắt buộc để sử dụng tính năng "Nhập từ Drive". <br/>
+                        <span className="text-red-500 font-bold">Quan trọng:</span> Hãy thêm domain của ứng dụng vào phần <strong>"Authorized JavaScript origins"</strong> trên Google Cloud Console.
+                    </p>
                   </div>
                 </div>
               </div>
@@ -172,107 +496,3 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ settings, onSave, onClo
                         <td className="px-6 py-3">
                            <RoleBadge role={u.role} />
                         </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* KNOWLEDGE BASE TAB */}
-          {activeTab === 'knowledge' && (
-            <div className="space-y-6 animate-fadeIn">
-               <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 flex items-start gap-3">
-                  <i className="fa-solid fa-circle-info text-blue-500 mt-1"></i>
-                  <div className="text-sm text-blue-800">
-                    <strong>Hướng dẫn:</strong> Nhập link Google Drive Folder chứa tài liệu cho từng phòng ban. 
-                    AI sẽ tự động tra cứu trong "Tài liệu chung" + "Tài liệu phòng ban" của người hỏi.
-                  </div>
-               </div>
-
-               <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-                  <div className="grid grid-cols-1 divide-y divide-gray-100">
-                    {Object.values(Department).map((dept) => (
-                      <div key={dept} className="p-4 hover:bg-gray-50 transition-colors flex items-center gap-4">
-                         <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 text-gray-500">
-                            <i className="fa-brands fa-google-drive text-xl"></i>
-                         </div>
-                         <div className="w-48 flex-shrink-0">
-                            <h4 className="font-medium text-gray-900">{dept}</h4>
-                            <p className="text-xs text-gray-500">Folder ID Config</p>
-                         </div>
-                         <div className="flex-1">
-                            <input 
-                              type="text"
-                              value={localSettings.departmentFolders[dept] || ''}
-                              onChange={(e) => {
-                                setLocalSettings(prev => ({
-                                  ...prev,
-                                  departmentFolders: {
-                                    ...prev.departmentFolders,
-                                    [dept]: e.target.value
-                                  }
-                                }));
-                              }}
-                              placeholder={`Paste Drive Link for ${dept}...`}
-                              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:border-blue-500 outline-none"
-                            />
-                         </div>
-                         <div className="flex-shrink-0">
-                           {localSettings.departmentFolders[dept] ? (
-                              <a 
-                                href={localSettings.departmentFolders[dept]} 
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-blue-600 hover:text-blue-800 text-sm"
-                              >
-                                <i className="fa-solid fa-external-link-alt mr-1"></i>
-                                Open
-                              </a>
-                           ) : (
-                             <span className="text-gray-300 text-sm italic">Chưa cấu hình</span>
-                           )}
-                         </div>
-                      </div>
-                    ))}
-                  </div>
-               </div>
-            </div>
-          )}
-
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const TabButton = ({ active, onClick, icon, label, disabled }: any) => (
-  <button
-    onClick={onClick}
-    disabled={disabled}
-    className={`
-      flex items-center gap-3 px-6 py-4 text-sm font-medium w-full text-left transition-colors
-      ${active ? 'bg-blue-50 text-blue-700 border-r-4 border-blue-600' : 'text-gray-600 hover:bg-gray-50'}
-      ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
-    `}
-  >
-    <i className={`fa-solid ${icon} w-5 text-center`}></i>
-    {label}
-  </button>
-);
-
-const RoleBadge = ({ role }: { role: UserRole }) => {
-  const colors = {
-    [UserRole.ADMIN]: 'bg-purple-100 text-purple-700',
-    [UserRole.EDITOR]: 'bg-orange-100 text-orange-700',
-    [UserRole.EMPLOYEE]: 'bg-gray-100 text-gray-700'
-  };
-  return (
-    <span className={`px-2 py-1 rounded-full text-xs font-bold ${colors[role]}`}>
-      {role}
-    </span>
-  );
-}
-
-export default SettingsScreen;

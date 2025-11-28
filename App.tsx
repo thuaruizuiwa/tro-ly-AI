@@ -3,7 +3,7 @@ import LoginScreen from './components/LoginScreen';
 import Sidebar from './components/Sidebar';
 import SettingsScreen from './components/SettingsScreen';
 import { User, ChatMessage, MessageType, SourceType, AppSettings } from './types';
-import { processQuery } from './services/geminiService';
+import { processQuery, initializeKnowledgeBaseEmbeddings } from './services/geminiService';
 import { getSettings } from './services/storageService';
 import ReactMarkdown from 'react-markdown';
 
@@ -13,6 +13,7 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [view, setView] = useState<'chat' | 'settings'>('chat');
   
@@ -28,9 +29,28 @@ export default function App() {
     }
   }, [messages, isLoading, view]);
 
+  // Trigger Vector Store Init when user logs in or API key changes OR knowledge base updates
+  useEffect(() => {
+    const initVectors = async () => {
+      const apiKey = settings.geminiApiKey || process.env.API_KEY;
+      if (user && apiKey) {
+        setIsInitializing(true);
+        try {
+          // Pass the dynamic knowledge base from settings
+          await initializeKnowledgeBaseEmbeddings(apiKey, settings.knowledgeBase || []);
+        } catch (e) {
+          console.error("Failed to init vectors", e);
+        } finally {
+          setIsInitializing(false);
+        }
+      }
+    };
+    initVectors();
+  }, [user, settings.geminiApiKey, settings.knowledgeBase]);
+
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || !user || isLoading) return;
+    if (!input.trim() || !user || isLoading || isInitializing) return;
 
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
@@ -43,7 +63,8 @@ export default function App() {
     setIsLoading(true);
 
     try {
-      const result = await processQuery(userMessage.content, user.department, settings);
+      // Pass the current message history to the service for context
+      const result = await processQuery(userMessage.content, user.department, settings, messages);
       
       const botMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
@@ -54,12 +75,14 @@ export default function App() {
       };
 
       setMessages(prev => [...prev, botMessage]);
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
       const errorMessage: ChatMessage = {
          id: (Date.now() + 1).toString(),
          type: MessageType.BOT,
-         content: "Hệ thống đang gặp sự cố. Vui lòng thử lại sau.",
+         content: error?.message?.includes('API Key') 
+            ? "Lỗi: Vui lòng nhập Gemini API Key trong phần Cài đặt." 
+            : "Hệ thống đang gặp sự cố. Vui lòng thử lại sau.",
       };
       setMessages(prev => [...prev, errorMessage]);
     } finally {
@@ -120,11 +143,17 @@ export default function App() {
             <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6">
               {messages.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-gray-400 opacity-60">
-                    <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mb-6">
+                    <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mb-6 animate-pulse">
                         <i className="fa-brands fa-google-drive text-blue-600 text-4xl"></i>
                     </div>
                     <p className="text-lg font-medium text-gray-600">Xin chào, {user.name}</p>
                     <p className="text-sm">Tôi đã kết nối với tài liệu phòng: <span className="font-bold">{user.department}</span></p>
+                    {isInitializing && (
+                      <div className="mt-4 flex items-center gap-2 text-xs bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full">
+                        <i className="fa-solid fa-spinner fa-spin"></i>
+                        Đang index dữ liệu vector...
+                      </div>
+                    )}
                 </div>
               ) : (
                 messages.map((msg) => (
@@ -150,14 +179,15 @@ export default function App() {
                             ? 'bg-gray-800 text-white rounded-tr-none' 
                             : 'bg-white text-gray-800 border border-gray-100 rounded-tl-none'}
                         `}>
-                            <ReactMarkdown 
-                                className="prose prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1"
-                                components={{
-                                    a: ({node, ...props}) => <a {...props} className="text-blue-500 hover:underline" target="_blank" rel="noreferrer" />
-                                }}
-                            >
-                                {msg.content}
-                            </ReactMarkdown>
+                            <div className="prose prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1">
+                                <ReactMarkdown 
+                                    components={{
+                                        a: ({node, ...props}) => <a {...props} className="text-blue-500 hover:underline" target="_blank" rel="noreferrer" />
+                                    }}
+                                >
+                                    {msg.content}
+                                </ReactMarkdown>
+                            </div>
                         </div>
 
                         {/* Meta / Sources */}
@@ -237,16 +267,16 @@ export default function App() {
                   type="text"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  placeholder="Đặt câu hỏi..."
-                  disabled={isLoading}
+                  placeholder={isInitializing ? "Đang index dữ liệu mới..." : "Đặt câu hỏi về tài liệu..."}
+                  disabled={isLoading || isInitializing}
                   className="w-full pl-5 pr-14 py-4 rounded-xl bg-gray-100 border-transparent focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all shadow-inner text-gray-800 disabled:opacity-50"
                 />
                 <button
                   type="submit"
-                  disabled={!input.trim() || isLoading}
+                  disabled={!input.trim() || isLoading || isInitializing}
                   className={`
                     absolute right-2 top-2 bottom-2 aspect-square rounded-lg flex items-center justify-center transition-all
-                    ${!input.trim() || isLoading 
+                    ${!input.trim() || isLoading || isInitializing
                       ? 'bg-gray-200 text-gray-400 cursor-not-allowed' 
                       : 'bg-blue-600 text-white hover:bg-blue-700 shadow-md'}
                   `}

@@ -6,6 +6,10 @@
     <title>Nexus Internal AI</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet" />
+    <!-- Google API Client Library (Legacy for Request) -->
+    <script src="https://apis.google.com/js/api.js"></script>
+    <!-- New Google Identity Services (For Auth) -->
+    <script src="https://accounts.google.com/gsi/client"></script>
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
       body {
@@ -37,7 +41,10 @@
     "react": "https://aistudiocdn.com/react@^19.2.0",
     "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
     "react-markdown": "https://aistudiocdn.com/react-markdown@^10.1.0",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0"
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
+    "mammoth": "https://cdn.jsdelivr.net/npm/mammoth@1.6.0/+esm",
+    "pdfjs-dist": "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/+esm",
+    "pdfjs-dist/build/pdf.worker.min.js": "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js"
   }
 }
 </script>
